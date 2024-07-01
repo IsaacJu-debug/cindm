@@ -15,7 +15,7 @@ from torch.utils.data import Dataset#, DataLoader
 
 from cindm.data.airfoil_dataset import Ellipse
 # from torch_geometric.loader import DataLoader
-from torch_geometric.data.dataloader import DataLoader
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv
 
 from torch.optim import Adam

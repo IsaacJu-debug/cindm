@@ -1004,7 +1004,7 @@ from tqdm.auto import tqdm
 # from utils import make_dir,get_item_1d
 import imageio
 import pdb
-from torch_geometric.data.dataloader import DataLoader
+from torch_geometric.loader import DataLoader
 
 def add_body(space,mass,radius,x,y,vx,vy):
     inertia = pymunk.moment_for_circle(mass, 0, radius)

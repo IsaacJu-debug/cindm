@@ -22,6 +22,11 @@ parser.add_argument('--is_testdata', default=True, type=bool,
                     help='where use mini test data or not')
 parser.add_argument('--results_folder', default="./checkpoint_path/diffusion_2d/", type=str,
                     help='fold to save the model results')
+# setup wandb logger
+parser.add_argument('--wandb_usr', type=str, default='graph-ccs', help='Weights & Biases user.')
+parser.add_argument('--no_wandb', action='store_true', default=True, help='Flag to not use Weights & Biases.')
+parser.add_argument('--online', action='store_true', default=True, help='Flag for online mode.')
+parser.add_argument('--project_name', type=str, default='msr-inverse-design', help='wandb project names.')
 
 FLAGS = parser.parse_args()
 if __name__ == "__main__":

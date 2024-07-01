@@ -8,9 +8,11 @@ import argparse
 import sys
 import os
 import pdb
+import wandb
+
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..'))
-from cindm.model.diffusion_1d import Unet1D, TemporalUnet1D, GaussianDiffusion1D, Trainer1D,Unet1D_forward_model
+from cindm.model.diffusion_1d import Unet1D, TemporalUnet1D, GaussianDiffusion1D, Trainer1D, Unet1D_forward_model
 from cindm.filepath import EXP_PATH
 import pprint as pp
 import torch

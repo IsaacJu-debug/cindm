@@ -389,7 +389,7 @@ if __name__ == '__main__':
             "coeff_ratio": 0.0002,
         },
         {
-            "num_boundaries": 2,
+            "num_boundaries": 3,
             "coeff_ratio": 0.0002
         }
     ]

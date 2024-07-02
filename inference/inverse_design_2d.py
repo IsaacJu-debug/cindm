@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
-from torch_geometric.data.dataloader import DataLoader
+from torch_geometric.loader import DataLoader
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..'))
 from cindm.data.airfoil_dataset import Ellipse

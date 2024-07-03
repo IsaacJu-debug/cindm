@@ -205,6 +205,7 @@ def load_model(args):
     )
 
     trainer.load(args.diffusion_checkpoint) # 
+    # define design_fn, which takes x as input and returns the gradient of the loss w.r.t. x
     def design_fn(x):
         x.requires_grad_()
         grad_force = force_fn(x, force_model, args.batch_size, args.num_boundaries, args.frames, args.sum_boundary)

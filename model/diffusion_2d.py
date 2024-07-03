@@ -893,6 +893,7 @@ class GaussianDiffusion(nn.Module):
     def p_sample_loop(self, shape, design_fn = None, design_guidance="standard", return_all_timesteps=None):
         batch, num_boundaries, device = shape[0], shape[1], self.betas.device        
         img = self.sample_noise(shape, device)
+        print('Noise shape {}'.format(img.shape))
         x_start = None
         for t in tqdm(reversed(range(0, self.num_timesteps)), desc = 'sampling loop time step', total = self.num_timesteps):
             # if t % 10 == 0:

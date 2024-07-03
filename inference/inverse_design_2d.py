@@ -386,11 +386,7 @@ if __name__ == '__main__':
 
     tune_args_list = [
         {
-            "num_boundaries": 1,
-            "coeff_ratio": 0.0002,
-        },
-        {
-            "num_boundaries": 3,
+            "num_boundaries": args.num_boundaries,
             "coeff_ratio": 0.0002
         }
     ]

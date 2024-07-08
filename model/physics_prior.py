@@ -2,12 +2,17 @@ import torch
 from grad_utils import *
 import einops as ein
         
-class ResidualsDarcy:
-    def __init__(self, model, fd_acc, pixels_per_dim, pixels_at_boundary, reverse_d1, device = 'cpu', bcs = 'none', domain_length = 1., residual_grad_guidance = False, use_ddim_x0 = False, ddim_steps = 0):
+class PhysicsPrior:
+    def __init__(self, model, fd_acc, pixels_per_dim, pixels_at_boundary, reverse_d1,
+                 device = 'cpu', bcs = 'none', domain_length = 1., residual_grad_guidance = False, use_ddim_x0 = False, ddim_steps = 0):
         """
         Initialize the residual evaluation.
 
         :param model: The neural network model to compute the residuals for.
+        :param fd_acc: Finite difference accuracy.
+        :param pixels_per_dim: Number of pixels per dimension.
+        :param pixels_at_boundary: Whether to have pixels at the boundary.
+        :param reverse_d1: Whether to reverse the second dimension.
         :param n_steps: Number of steps for time discretization.
         :param E: Young's Modulus.
         :param nu: Poisson's Ratio.

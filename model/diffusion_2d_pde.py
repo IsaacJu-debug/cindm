@@ -18,11 +18,7 @@ from torch.optim import Adam
 from torch.utils.data import Dataset  # , DataLoader
 
 # from torch_geometric.loader import DataLoader
-try:
-    from torch_geometric.loader import DataLoader
-except ImportError:
-    from torch_geometric.data import DataLoader
-
+from torch_geometric.data.dataloader import DataLoader
 from torchvision import transforms as T
 from tqdm.auto import tqdm
 
@@ -1358,8 +1354,6 @@ class Dataset(Dataset):
 
 
 # trainer class
-
-
 class Trainer(object):
     def __init__(
         self,

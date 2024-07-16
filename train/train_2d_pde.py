@@ -5,7 +5,7 @@ sys.path.append(os.path.join(os.path.dirname("__file__"), ".."))
 sys.path.append(os.path.join(os.path.dirname("__file__"), "..", ".."))
 import argparse
 
-from cindm.model.diffusion_2d import GaussianDiffusion, Trainer, Unet
+from cindm.model.diffusion_2d_pde import GaussianDiffusion, Trainer, Unet
 
 parser = argparse.ArgumentParser(description="Train EBM model")
 

@@ -1,0 +1,50 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "mounts": [
+        "type=bind,source=${localEnv:HOME}${localEnv:USERPROFILE},target=/user-home",
+        "type=bind,source=/mnt/fastdata,target=/data/pde_data"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "charliermarsh.ruff",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-python.isort",
+                "ms-toolsai.jupyter",
+                "ms-azuretools.vscode-docker",
+                "github.copilot",
+                "DavidAnson.vscode-markdownlint",
+                "ms-vscode-remote.remote-containers",
+                "eamodio.gitlens",
+                "mutantdino.resourcemonitor"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/bin/python",
+                "python.testing.unittestEnabled": false,
+                "python.testing.pytestEnabled": true,
+                "python.terminal.activateEnvironment": false,
+                "editor.defaultFormatter": "charliermarsh.ruff",
+                "editor.formatOnSave": true,
+                "editor.codeActionsOnSave": {
+                    "source.fixAll.ruff": "explicit".
+                    "source.organizeImports.ruff": "explicit"
+                },
+                "python.analysis.typeCheckingMode": "basic",
+                "python.analysis.diagnosticMode": "workspace",
+                "git.autofetch": "all",
+                "terminal.integrated.allowChords": false
+            }
+        }
+    },
+    "postCreateCommand": "bash .devcontainer/post-create.sh",
+    "runArgs": [
+        "--gpus=all",
+        "--ipc=host",
+        "--init",
+        "--privileged",
+        "--net=host"
+    ]
+}

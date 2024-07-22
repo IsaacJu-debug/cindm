@@ -6,3 +6,5 @@ pymunk
 pygame
 imageio
 shapely
+termcolor
+deepsnap

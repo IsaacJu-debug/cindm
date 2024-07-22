@@ -5,7 +5,11 @@ import einops as ein
 class DivergenceFreePrior:
     def __init__(self, model, fd_acc, pixels_per_dim, pixels_at_boundary, reverse_d1, 
                  guidance_strength,
-                 device = 'cpu', bcs = 'none', domain_length = 1., residual_grad_guidance = False, use_ddim_x0 = False, ddim_steps = 0):
+                 device = 'cpu',
+                 bcs = 'none',
+                 domain_length = 1.,
+                 residual_grad_guidance = False,
+                 use_ddim_x0 = False, ddim_steps = 0):
         """
         Initialize the residual evaluation for divergence-free constraints
 

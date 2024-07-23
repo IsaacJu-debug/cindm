@@ -11,7 +11,6 @@ sys.path.append(os.path.join(os.path.dirname("__file__"), ".."))
 sys.path.append(os.path.join(os.path.dirname("__file__"), "..", ".."))
 from cindm.filepath import AIRFOILS_PATH
 from cindm.model.diffusion_2d import ForceUnet, GaussianDiffusion, Trainer, Unet
-from cindm.model.physics_prior import DivergenceFreePrior
 from cindm.utils import reconstruct_boundary
 from matplotlib.backends.backend_pdf import PdfPages
 from shapely.geometry import Polygon
@@ -127,6 +126,13 @@ parser.add_argument(
     help="tradeoff between force grad and overlap grad",
 )
 parser.add_argument(
+    "--lambda_physics",
+    default=1.0,
+    type=float,
+    help="tradeoff between physics grad and force grad",
+)
+
+parser.add_argument(
     "--lambda_force",
     default=1.0,
     type=float,
@@ -146,13 +152,6 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--use_physics_loss",
-    default=True,
-    type=bool,
-    help="whether use physics losses to guide the inverse design",
-)
-
-parser.add_argument(
     "--df_acc",
     default=2,
     type=int,
@@ -161,9 +160,16 @@ parser.add_argument(
 
 parser.add_argument(
     "--use_physics_loss",
-    default=True,
+    default=False,
     type=bool,
     help="whether use physics losses to guide the inverse design",
+)
+
+parser.add_argument(
+    "--print_residual",
+    default=False,
+    type=bool,
+    help="whether print all residuals",
 )
 
 
@@ -256,7 +262,7 @@ def force_fn(x, force_model, batch_size, num_boundaries, frames, sum_boundary=Tr
             summed_forces, x, grad_outputs=torch.ones_like(summed_forces)
         )[0]
 
-    return grad_force
+    return grad_force, summed_forces
 
 
 def overlap_fn(x, batch_size, num_boundaries, downsampling_factor=4):
@@ -325,16 +331,6 @@ def load_model(args):
         use_average_share=args.use_average_share,
     )
 
-    # load physics prior
-    if args.use_physics_loss:
-        # TODO
-        physics_prior = DivergenceFreePrior(
-            fd_acc=args.df_acc,
-            pixels_per_dim=diffusion.pixels_per_dim,
-            pixels_at_boundary=False,
-            reverse_d1=True,
-        )
-
     # load trainer
     trainer = Trainer(
         diffusion,
@@ -354,11 +350,23 @@ def load_model(args):
 
     trainer.load(args.diffusion_checkpoint)  #
 
+    # instantiate physics prior
+    if args.use_physics_loss:
+        from cindm.model.physics_prior import DivergenceFreePrior
+
+        physics_prior = DivergenceFreePrior(
+            fd_acc=args.df_acc,
+            pixels_per_dim=diffusion.image_size,
+            pixels_at_boundary=False,
+            reverse_d1=False,
+            device=device,
+        )
+
     # define design_fn, which takes x as input and returns the gradient of the loss w.r.t. x
     def design_fn(x):
         x.requires_grad_()
         # compute the gradients wrt objective function
-        grad_force = force_fn(
+        grad_force, summed_force = force_fn(
             x,
             force_model,
             args.batch_size,
@@ -373,10 +381,19 @@ def load_model(args):
         )
 
         # compute the gradients wrt the physics loss
-        # TODO
+        if args.use_physics_loss:
+            grad_physics, residual = physics_prior.residual_correction(x)
 
-        g = grad_force + args.lambda_overlap * grad_nonoverlap
-
+            g = (
+                grad_force
+                + args.lambda_overlap * grad_nonoverlap
+                + args.lambda_physics * grad_physics
+            )
+            if args.print_residual:
+                print("Force objective residual: ", torch.mean(summed_force, dim=0))
+                print("Divergence residual: ", torch.mean(residual, dim=0))
+        else:
+            g = grad_force + args.lambda_overlap * grad_nonoverlap
         return g
 
     return force_model, diffusion, design_fn

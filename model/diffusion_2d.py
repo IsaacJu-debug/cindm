@@ -8,46 +8,21 @@ import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
 from cindm.data.airfoil_dataset import Ellipse
-<<<<<<< HEAD
-# from torch_geometric.loader import DataLoader
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GCNConv
-
-from torch.optim import Adam
-from torch.autograd import grad
-
-from torchvision import transforms as T, utils
-
-=======
 from cindm.utils import p
->>>>>>> main
 from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange
 from ema_pytorch import EMA
-from PIL import Image
 from torch import einsum, nn
 from torch.optim import Adam
-from torch.utils.data import Dataset  # , DataLoader
 
-<<<<<<< HEAD
-from accelerate import Accelerator
-
-from imageio import imwrite
-from cindm.utils import p
-import os
-
-#from grad_utils import generalized_b_xy_c_to_image, generalized_image_to_b_xy_c
-=======
 # from torch_geometric.loader import DataLoader
 try:
     from torch_geometric.loader import DataLoader
 except ImportError:
     from torch_geometric.data import DataLoader
 
-from torchvision import transforms as T
 from tqdm.auto import tqdm
 
->>>>>>> main
 # constants
 
 ModelPrediction = namedtuple("ModelPrediction", ["pred_noise", "pred_x_start"])
@@ -133,14 +108,6 @@ def Downsample(dim, dim_out=None):
         nn.Conv2d(dim * 4, default(dim_out, dim), 1),
     )
 
-<<<<<<< HEAD
-def right_pad_dims_to(x, t):
-    padding_dims = x.ndim - t.ndim
-    if padding_dims <= 0:
-        return t
-    return t.view(*t.shape, *((1,) * padding_dims))
-=======
->>>>>>> main
 
 class WeightStandardizedConv2d(nn.Conv2d):
     """
@@ -934,81 +901,101 @@ class GaussianDiffusion(nn.Module):
         return x
 
     # a helper function to sample with physics prior
-    def p_sample_pi(self, x, conditioning_input, t, 
-                save_output = False, surpress_noise = False, 
-                use_dynamic_threshold = False, residual_func = None, eval_residuals = False,
-                return_optimizer = False, return_inequality = False, residual_correction = False,
-                correction_mode = 'none'):
-        
-        x_init = x.clone().detach()        
+    def p_sample_pi(
+        self,
+        x,
+        conditioning_input,
+        t,
+        save_output=False,
+        surpress_noise=False,
+        use_dynamic_threshold=False,
+        residual_func=None,
+        eval_residuals=False,
+        return_optimizer=False,
+        return_inequality=False,
+        residual_correction=False,
+        correction_mode="none",
+    ):
+        x_init = x.clone().detach()
         if conditioning_input is not None:
-            conditioning, bcs, solution = conditioning_input 
-            x = torch.cat((x, conditioning), dim = 1)
+            conditioning, bcs, solution = conditioning_input
+            x = torch.cat((x, conditioning), dim=1)
         batch_size = len(x)
-        assert correction_mode in ['x0', 'xt'] or not residual_correction, 'Correction mode unknown or not given.'
-        
+        assert (
+            correction_mode in ["x0", "xt"] or not residual_correction
+        ), "Correction mode unknown or not given."
+
         t = torch.tensor([t], device=x.device)
-        model_input = image_to_b_xy_c(x) # we reshape this later to an image in U-net model class but let's be consistent here with the operator model
+        model_input = image_to_b_xy_c(
+            x
+        )  # we reshape this later to an image in U-net model class but let's be consistent here with the operator model
         model_input = (model_input, t.repeat(batch_size))
 
         model_intermediate = None
-        
+
         # model output
         # evaluate residuals at last timestep if required
-        if residual_func.gov_eqs == 'darcy':
-            residual_input = (model_input, )
+        if residual_func.gov_eqs == "darcy":
+            residual_input = (model_input,)
             sample = True
-        if residual_func.gov_eqs == 'mechanics':       
-            vf = conditioning[:,0,0,0]
+        if residual_func.gov_eqs == "mechanics":
+            vf = conditioning[:, 0, 0, 0]
             # vf = x_0[:,2].mean((1,2))
             residual_input = (model_input, bcs, vf, solution)
             if t[0] == 0:
                 sample = True
             else:
                 sample = False
-        out_dict = residual_func.compute_residual(  residual_input,
-                                                    reduce='per-batch',
-                                                    return_model_out = True,
-                                                    return_optimizer = return_optimizer,
-                                                    return_inequality = return_inequality,
-                                                    sample = sample,
-                                                    ddim_func = self.ddim_sample_x0)
-        
-        output, residual = out_dict['model_out'], out_dict['residual']
+        out_dict = residual_func.compute_residual(
+            residual_input,
+            reduce="per-batch",
+            return_model_out=True,
+            return_optimizer=return_optimizer,
+            return_inequality=return_inequality,
+            sample=sample,
+            ddim_func=self.ddim_sample_x0,
+        )
+
+        output, residual = out_dict["model_out"], out_dict["residual"]
         model_out = output
         if len(model_out.shape) == 3:
             # convert to image [batch_size, channels, pixels, pixels]
             model_out = generalized_b_xy_c_to_image(model_out)
 
-        if residual_correction and correction_mode == 'x0':
-            model_out, residual = residual_func.residual_correction(generalized_image_to_b_xy_c(model_out))
+        if residual_correction and correction_mode == "x0":
+            model_out, residual = residual_func.residual_correction(
+                generalized_image_to_b_xy_c(model_out)
+            )
             model_out = generalized_b_xy_c_to_image(model_out)
-            
+
         if save_output:
             model_intermediate = model_out.clone().detach()
         x0_pred = model_out
         mean = (
-            extract(self.diff_dict['posterior_mean_coef1'], t, x_init) * x0_pred +
-            extract(self.diff_dict['posterior_mean_coef2'], t, x_init) * x_init
+            extract(self.diff_dict["posterior_mean_coef1"], t, x_init) * x0_pred
+            + extract(self.diff_dict["posterior_mean_coef2"], t, x_init) * x_init
         )
 
         # Generate z
         z = torch.randn_like(x_init, device=x.device)
         # Fixed sigma
-        sigma_t = extract(self.diff_dict['betas'], t, x_init).sqrt()
+        sigma_t = extract(self.diff_dict["betas"], t, x_init).sqrt()
         # no noise when t == 0
         if surpress_noise:
-            nonzero_mask = (1. - (t == 0).float())
+            nonzero_mask = 1.0 - (t == 0).float()
         else:
-            nonzero_mask = 1.
+            nonzero_mask = 1.0
         sample = mean + nonzero_mask * sigma_t * z
 
-        if residual_correction and correction_mode == 'xt':
-            sample, residual = residual_func.residual_correction(generalized_image_to_b_xy_c(sample))
+        if residual_correction and correction_mode == "xt":
+            sample, residual = residual_func.residual_correction(
+                generalized_image_to_b_xy_c(sample)
+            )
             sample = generalized_b_xy_c_to_image(sample)
 
         dynamic_thres_percentile = 0.9
         if use_dynamic_threshold:
+
             def maybe_clip(x):
                 s = torch.quantile(
                     rearrange(x.float(), "b ... -> b (...)").abs(),
@@ -1019,20 +1006,23 @@ class GaussianDiffusion(nn.Module):
                 s = right_pad_dims_to(x, s)
                 x = x.clamp(-s, s) / s
                 return x
+
             sample = maybe_clip(sample)
-        
-        if (t[0] == 0 and eval_residuals):
+
+        if t[0] == 0 and eval_residuals:
             aux_out = {}
-            aux_out['residual'] = residual
+            aux_out["residual"] = residual
             if return_optimizer:
-                aux_out['optimized_quant'] = out_dict['optimizer']
+                aux_out["optimized_quant"] = out_dict["optimizer"]
             if return_inequality:
-                aux_out['inequality_quant'] = out_dict['inequality']
-            if residual_func.gov_eqs == 'mechanics':
+                aux_out["inequality_quant"] = out_dict["inequality"]
+            if residual_func.gov_eqs == "mechanics":
                 if residual_func.topopt_eval:
-                    aux_out['rel_CE_error_full_batch'] = out_dict['rel_CE_error_full_batch']
-                    aux_out['vf_error_full_batch'] = out_dict['vf_error_full_batch']
-                    aux_out['fm_error_full_batch'] = out_dict['fm_error_full_batch']
+                    aux_out["rel_CE_error_full_batch"] = out_dict[
+                        "rel_CE_error_full_batch"
+                    ]
+                    aux_out["vf_error_full_batch"] = out_dict["vf_error_full_batch"]
+                    aux_out["fm_error_full_batch"] = out_dict["fm_error_full_batch"]
 
             return (sample, model_intermediate), aux_out
         else:
@@ -1224,7 +1214,7 @@ class GaussianDiffusion(nn.Module):
     ):
         batch, num_boundaries, device = shape[0], shape[1], self.betas.device
         img = self.sample_noise(shape, device)
-        print('Noise shape {}'.format(img.shape))
+        print("Noise shape {}".format(img.shape))
         x_start = None
         for t in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -1449,7 +1439,6 @@ class GaussianDiffusion(nn.Module):
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
         return self.p_losses(img, t, cond, *args, **kwargs)
-
 
 
 # trainer class

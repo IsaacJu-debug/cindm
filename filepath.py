@@ -1,7 +1,7 @@
 import os
 import sys
 
-AIRFOILS_PATH = "/home/t-isaacju/data/01_cindm/dataset/airfoils_dataset/"
+AIRFOILS_PATH = "/data/01_cindm/dataset/airfoils_dataset/"
 sys.path.append(os.path.join(os.path.dirname("__file__"), ".."))
 sys.path.append(os.path.join(os.path.dirname("__file__"), "..", ".."))
 

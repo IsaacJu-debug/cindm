@@ -15,6 +15,22 @@
                 "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
             },
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Bastion (Inference 2D)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference/inverse_design_2d.py",
+            "args": [
+                "--ForceNet_path", "/data/01_cindm/checkpoint_path/force_surrogate_model.pth",
+                "--diffusion_model_path", "/data/01_cindm/checkpoint_path/diffusion_2d/"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            },
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

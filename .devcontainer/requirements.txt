@@ -97,7 +97,11 @@ vtk>=9.2.2
 # cindm requirements
 ema_pytorch
 accelerate
+einops
+tqdm
 pymunk
 pygame
 imageio
 shapely
+termcolor
+deepsnap

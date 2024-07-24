@@ -34,6 +34,18 @@
                 "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
             },
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug Evaluation 2D",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference/evaluation_2d/evaluation_2d_design.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            },
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

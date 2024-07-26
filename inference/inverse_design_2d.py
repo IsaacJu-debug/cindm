@@ -55,7 +55,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--num_boundaries",
-    default=3,
+    default=2,
     type=int,
     help="number of boundaries in inverse design",
 )
@@ -172,6 +172,19 @@ parser.add_argument(
     help="whether print all residuals",
 )
 
+parser.add_argument(
+    "--save_residuals",
+    default=False,
+    type=bool,
+    help="whether save objective residuals and physics residuals",
+)
+
+parser.add_argument(
+    "--sampling_steps",
+    default=1000,
+    type=int,
+    help="number of sampling steps",  # standard sampling steps. we change this for debugging purpose
+)
 
 args = parser.parse_args()
 
@@ -316,9 +329,9 @@ def load_model(args):
         image_size=64,
         cond_frames=args.cond_frames,
         frames=args.frames,
-        timesteps=1000,  # number of steps
+        timesteps=args.sampling_steps,  # number of steps
         # sampling_timesteps = 250,   # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
-        sampling_timesteps=1000,  # do not use ddim
+        sampling_timesteps=args.sampling_steps,  # do not use ddim
         loss_type="l2",  # L1 or L2
         objective="pred_noise",
         diffuse_cond=True,  # diffuse on both cond states, pred states and boundary
@@ -351,16 +364,16 @@ def load_model(args):
     trainer.load(args.diffusion_checkpoint)  #
 
     # instantiate physics prior
-    if args.use_physics_loss:
-        from cindm.model.physics_prior import DivergenceFreePrior
+    # if args.use_physics_loss:
+    from cindm.model.physics_prior import DivergenceFreePrior
 
-        physics_prior = DivergenceFreePrior(
-            fd_acc=args.df_acc,
-            pixels_per_dim=diffusion.image_size,
-            pixels_at_boundary=False,
-            reverse_d1=False,
-            device=device,
-        )
+    physics_prior = DivergenceFreePrior(
+        fd_acc=args.df_acc,
+        pixels_per_dim=diffusion.image_size,
+        pixels_at_boundary=False,
+        reverse_d1=False,
+        device=device,
+    )
 
     # define design_fn, which takes x as input and returns the gradient of the loss w.r.t. x
     def design_fn(x):
@@ -381,43 +394,59 @@ def load_model(args):
         )
 
         # compute the gradients wrt the physics loss
-        if args.use_physics_loss:
-            grad_physics, residual = physics_prior.residual_correction(x)
+        grad_physics, physics_residual = physics_prior.residual_correction(x)
 
+        if args.use_physics_loss:
             g = (
                 grad_force
                 + args.lambda_overlap * grad_nonoverlap
                 + args.lambda_physics * grad_physics
             )
             if args.print_residual:
-                print("Force objective residual: ", torch.mean(summed_force, dim=0))
-                print("Divergence residual: ", torch.mean(residual, dim=0))
+                print("Divergence residual: ", torch.mean(physics_residual, dim=0))
         else:
             g = grad_force + args.lambda_overlap * grad_nonoverlap
-        return g
+
+        if args.print_residual:
+            print("Force residual: ", torch.mean(summed_force, dim=0))
+        return g, (summed_force, physics_residual)
 
     return force_model, diffusion, design_fn
 
 
 def inference(force_model, diffusion, design_fn, args):
     print("start inference ...")
-    design_guidance_list = ["standard-alpha"]
+    design_guidance_list = [
+        "standard",
+        "standard-alpha",
+        "universal-forward",
+        "universal-backward",
+        "universal-forward-recurrence-5",
+    ]
     result_path = os.path.join(
         args.inference_result_path,
-        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}".format(
+        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_gophy_{}_phyLambda_{}".format(
             args.num_boundaries,
             args.frames,
             args.coeff_ratio,
             args.diffusion_checkpoint,
+            args.use_physics_loss,
+            args.lambda_physics,
         ),
     )
     # save sampling results
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
+    all_force_residuals = {dg: [] for dg in design_guidance_list}
+    all_physics_residuals = {dg: [] for dg in design_guidance_list}
+
     for batch_id in range(args.num_batches):
         print("batch_id: ", batch_id)
         preds = {}
+        force_residuals = {}
+        physics_residuals = {}
+
         result_path_batch = os.path.join(result_path, "batch_{}".format(batch_id))
         if not os.path.exists(result_path_batch):
             os.makedirs(result_path_batch)
@@ -430,9 +459,59 @@ def inference(force_model, diffusion, design_fn, args):
                 num_boundaries=args.num_boundaries,
             )
             preds[design_guidance] = pred
+            if args.save_residuals:
+                x_0 = pred.reshape(-1, *pred.shape[2:])
+                _, (force_residual, physics_residual) = design_fn(x_0)
+                force_residuals[design_guidance] = force_residual.detach().cpu().numpy()
+                physics_residuals[design_guidance] = (
+                    physics_residual.detach().cpu().numpy()
+                )
+
+                all_force_residuals[design_guidance].extend(
+                    force_residuals[design_guidance]
+                )
+                all_physics_residuals[design_guidance].extend(
+                    physics_residuals[design_guidance]
+                )
+
+                print(
+                    f"Force Residual: {force_residual.mean().item():.4f} ± {force_residual.std().item():.4f}"
+                )
+                print(
+                    f"Physics Residual: {physics_residual.mean().item():.4f} ± {physics_residual.std().item():.4f}"
+                )
 
         with open(os.path.join(result_path_batch, "preds.pkl"), "wb") as file:
             pickle.dump(preds, file)
+
+        if args.save_residuals:
+            with open(
+                os.path.join(result_path_batch, "force_residuals.pkl"), "wb"
+            ) as file:
+                pickle.dump(force_residuals, file)
+            with open(
+                os.path.join(result_path_batch, "physics_residuals.pkl"), "wb"
+            ) as file:
+                pickle.dump(physics_residuals, file)
+
+    # Save all residuals to text files
+    if args.save_residuals:
+        # Save summary statistics
+        summary_file = os.path.join(result_path, "residual_summary.txt")
+        with open(summary_file, "w") as f:
+            for design_guidance in design_guidance_list:
+                force_mean = np.mean(all_force_residuals[design_guidance])
+                force_std = np.std(all_force_residuals[design_guidance])
+                physics_mean = np.mean(all_physics_residuals[design_guidance])
+                physics_std = np.std(all_physics_residuals[design_guidance])
+
+                f.write(f"{design_guidance}:\n")
+                f.write(f"  Force Residual: {force_mean:.4f} ± {force_std:.4f}\n")
+                f.write(
+                    f"  Physics Residual: {physics_mean:.4f} ± {physics_std:.4f}\n\n"
+                )
+
+    print("All runs completed.")
 
 
 def do_overlap(boundaries):
@@ -461,11 +540,13 @@ def select_and_plot_boundaries(args, colors=["red", "blue", "orange"]):
     n_show_examples = args.batch_size
     result_path = os.path.join(
         args.inference_result_path,
-        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}".format(
+        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_gophy_{}_phyLambda_{}".format(
             args.num_boundaries,
             args.frames,
             args.coeff_ratio,
             args.diffusion_checkpoint,
+            args.use_physics_loss,
+            args.lambda_physics,
         ),
     )
     assert os.path.exists(result_path)

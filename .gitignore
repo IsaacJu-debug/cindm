@@ -129,6 +129,7 @@ ENV/
 env.bak/
 venv.bak/
 /saved/
+logs/
 
 # Spyder project settings
 .spyderproject

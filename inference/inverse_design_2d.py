@@ -131,7 +131,6 @@ parser.add_argument(
     type=float,
     help="tradeoff between physics grad and force grad",
 )
-
 parser.add_argument(
     "--lambda_force",
     default=1.0,
@@ -156,13 +155,6 @@ parser.add_argument(
     default=2,
     type=int,
     help="Finite difference accuracy",
-)
-
-parser.add_argument(
-    "--use_physics_loss",
-    default=False,
-    type=bool,
-    help="whether use physics losses to guide the inverse design",
 )
 
 parser.add_argument(
@@ -275,7 +267,14 @@ def force_fn(x, force_model, batch_size, num_boundaries, frames, sum_boundary=Tr
             summed_forces, x, grad_outputs=torch.ones_like(summed_forces)
         )[0]
 
-    return grad_force, summed_forces
+    # Calculate drag to lift ratio
+    total_drag = torch.sum(
+        torch.stack([torch.abs(f[:, 0]) for f in lift_drag_forces]), dim=0
+    )
+    total_lift = torch.sum(torch.stack([f[:, 1] for f in lift_drag_forces]), dim=0)
+    lift_to_drag_ratio = total_lift / (total_drag + 1e-8)
+
+    return grad_force, summed_forces, lift_to_drag_ratio
 
 
 def overlap_fn(x, batch_size, num_boundaries, downsampling_factor=4):
@@ -364,7 +363,6 @@ def load_model(args):
     trainer.load(args.diffusion_checkpoint)  #
 
     # instantiate physics prior
-    # if args.use_physics_loss:
     from cindm.model.physics_prior import DivergenceFreePrior
 
     physics_prior = DivergenceFreePrior(
@@ -378,8 +376,11 @@ def load_model(args):
     # define design_fn, which takes x as input and returns the gradient of the loss w.r.t. x
     def design_fn(x):
         x.requires_grad_()
-        # compute the gradients wrt objective function
-        grad_force, summed_force = force_fn(
+        total_grad = 0
+        losses = {}
+        LAMBDA_THRESHOLD = 1e-10
+        # Objective function (force) loss
+        grad_force, summed_force, lift_to_drag_ratio = force_fn(
             x,
             force_model,
             args.batch_size,
@@ -387,51 +388,53 @@ def load_model(args):
             args.frames,
             args.sum_boundary,
         )
+        losses["force"] = summed_force
+        losses["lift_to_drag_ratio"] = lift_to_drag_ratio
 
-        # compute the gradient wrt overlap functon, penalizing overlap between different boundaries
+        if np.abs(args.lambda_force) > LAMBDA_THRESHOLD:
+            total_grad += args.lambda_force * grad_force
+        if args.print_residual:
+            print("Force residual: ", torch.mean(summed_force, dim=0))
+
+        # Overlap loss
         grad_nonoverlap = overlap_fn(
             x, args.batch_size, args.num_boundaries, args.downsampling_factor
         )
+        losses["overlap"] = grad_nonoverlap  # This is already a loss-like quantity
+        if np.abs(args.lambda_overlap) > LAMBDA_THRESHOLD:
+            total_grad += args.lambda_overlap * grad_nonoverlap
 
-        # compute the gradients wrt the physics loss
-        grad_physics, physics_residual = physics_prior.residual_correction(x)
+        # Physics loss
+        grad_physics, physics_residual, physics_error = (
+            physics_prior.residual_correction(x)
+        )
+        losses["physics"] = physics_residual
+        losses["physics_error"] = physics_error
 
-        if args.use_physics_loss:
-            g = (
-                grad_force
-                + args.lambda_overlap * grad_nonoverlap
-                + args.lambda_physics * grad_physics
-            )
-            if args.print_residual:
-                print("Divergence residual: ", torch.mean(physics_residual, dim=0))
-        else:
-            g = grad_force + args.lambda_overlap * grad_nonoverlap
-
+        if np.abs(args.lambda_physics) > LAMBDA_THRESHOLD:
+            total_grad += args.lambda_physics * grad_physics
         if args.print_residual:
-            print("Force residual: ", torch.mean(summed_force, dim=0))
-        return g, (summed_force, physics_residual)
+            print("Divergence residual MSE loss: ", torch.mean(physics_residual, dim=0))
+            print("Divergence residual error: ", torch.mean(physics_error, dim=0))
+
+        return total_grad, losses
 
     return force_model, diffusion, design_fn
 
 
 def inference(force_model, diffusion, design_fn, args):
     print("start inference ...")
-    design_guidance_list = [
-        "standard",
-        "standard-alpha",
-        "universal-forward",
-        "universal-backward",
-        "universal-forward-recurrence-5",
-    ]
+    design_guidance_list = ["standard-alpha"]
+    lambda_str = f"force_{args.lambda_force:.2e}_overlap_{args.lambda_overlap:.2e}_physics_{args.lambda_physics:.2e}"
+
     result_path = os.path.join(
         args.inference_result_path,
-        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_gophy_{}_phyLambda_{}".format(
+        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_lambda_{}".format(
             args.num_boundaries,
             args.frames,
             args.coeff_ratio,
             args.diffusion_checkpoint,
-            args.use_physics_loss,
-            args.lambda_physics,
+            lambda_str,
         ),
     )
     # save sampling results
@@ -439,13 +442,15 @@ def inference(force_model, diffusion, design_fn, args):
         os.makedirs(result_path)
 
     all_force_residuals = {dg: [] for dg in design_guidance_list}
-    all_physics_residuals = {dg: [] for dg in design_guidance_list}
+    all_physics_errors = {dg: [] for dg in design_guidance_list}
+    all_lift_to_drag_ratios = {dg: [] for dg in design_guidance_list}
 
     for batch_id in range(args.num_batches):
         print("batch_id: ", batch_id)
         preds = {}
         force_residuals = {}
-        physics_residuals = {}
+        physics_errors = {}
+        lift_to_drag_ratios = {}
 
         result_path_batch = os.path.join(result_path, "batch_{}".format(batch_id))
         if not os.path.exists(result_path_batch):
@@ -461,24 +466,37 @@ def inference(force_model, diffusion, design_fn, args):
             preds[design_guidance] = pred
             if args.save_residuals:
                 x_0 = pred.reshape(-1, *pred.shape[2:])
-                _, (force_residual, physics_residual) = design_fn(x_0)
+                _, losses = design_fn(x_0)
+
+                force_residual, physics_error, lift_to_drag_ratio = (
+                    losses["force"],
+                    losses["physics_error"],
+                    losses["lift_to_drag_ratio"],
+                )
                 force_residuals[design_guidance] = force_residual.detach().cpu().numpy()
-                physics_residuals[design_guidance] = (
-                    physics_residual.detach().cpu().numpy()
+                physics_errors[design_guidance] = physics_error.detach().cpu().numpy()
+                lift_to_drag_ratios[design_guidance] = (
+                    lift_to_drag_ratio.detach().cpu().numpy()
                 )
 
                 all_force_residuals[design_guidance].extend(
                     force_residuals[design_guidance]
                 )
-                all_physics_residuals[design_guidance].extend(
-                    physics_residuals[design_guidance]
+                all_physics_errors[design_guidance].extend(
+                    physics_errors[design_guidance]
+                )
+                all_lift_to_drag_ratios[design_guidance].extend(
+                    lift_to_drag_ratios[design_guidance]
                 )
 
                 print(
                     f"Force Residual: {force_residual.mean().item():.4f} ± {force_residual.std().item():.4f}"
                 )
                 print(
-                    f"Physics Residual: {physics_residual.mean().item():.4f} ± {physics_residual.std().item():.4f}"
+                    f"Physics Error: {physics_error.mean().item():.4f} ± {physics_error.std().item():.4f}"
+                )
+                print(
+                    f"Lift-to-Drag Ratio: {lift_to_drag_ratio.mean().item():.4f} ± {lift_to_drag_ratio.std().item():.4f}"
                 )
 
         with open(os.path.join(result_path_batch, "preds.pkl"), "wb") as file:
@@ -490,28 +508,55 @@ def inference(force_model, diffusion, design_fn, args):
             ) as file:
                 pickle.dump(force_residuals, file)
             with open(
-                os.path.join(result_path_batch, "physics_residuals.pkl"), "wb"
+                os.path.join(result_path_batch, "physics_errors.pkl"), "wb"
             ) as file:
-                pickle.dump(physics_residuals, file)
+                pickle.dump(physics_errors, file)
+            with open(
+                os.path.join(result_path_batch, "lift_to_drag_ratios.pkl"), "wb"
+            ) as file:
+                pickle.dump(lift_to_drag_ratios, file)
 
     # Save all residuals to text files
     if args.save_residuals:
-        # Save summary statistics
-        summary_file = os.path.join(result_path, "residual_summary.txt")
-        with open(summary_file, "w") as f:
-            for design_guidance in design_guidance_list:
-                force_mean = np.mean(all_force_residuals[design_guidance])
-                force_std = np.std(all_force_residuals[design_guidance])
-                physics_mean = np.mean(all_physics_residuals[design_guidance])
-                physics_std = np.std(all_physics_residuals[design_guidance])
-
-                f.write(f"{design_guidance}:\n")
-                f.write(f"  Force Residual: {force_mean:.4f} ± {force_std:.4f}\n")
-                f.write(
-                    f"  Physics Residual: {physics_mean:.4f} ± {physics_std:.4f}\n\n"
-                )
+        save_summary_statistics(
+            result_path,
+            design_guidance_list,
+            all_force_residuals,
+            all_physics_errors,
+            all_lift_to_drag_ratios,
+        )
 
     print("All runs completed.")
+
+
+def save_summary_statistics(
+    result_path,
+    design_guidance_list,
+    all_force_residuals,
+    all_physics_residuals,
+    all_lift_to_drag_ratios,
+):
+    summary_file = os.path.join(result_path, "summary_statistics.txt")
+    with open(summary_file, "w") as f:
+        for design_guidance in design_guidance_list:
+            force_residuals = np.array(all_force_residuals[design_guidance])
+            physics_residuals = np.array(all_physics_residuals[design_guidance])
+            lift_to_drag_ratios = np.array(all_lift_to_drag_ratios[design_guidance])
+
+            f.write(f"{design_guidance}:\n")
+            for name, data in [
+                ("Force Residual", force_residuals),
+                ("Physics Residual", physics_residuals),
+                ("Lift-to-Drag Ratio", lift_to_drag_ratios),
+            ]:
+                f.write(f"{name}:\n")
+                f.write(f"  Mean ± Std: {np.mean(data):.4f} ± {np.std(data):.4f}\n")
+                f.write(f"  Min: {np.min(data):.4f}\n")
+                f.write(f"  Max: {np.max(data):.4f}\n")
+                f.write(f"  Median: {np.median(data):.4f}\n")
+            f.write("\n")
+
+    print(f"Summary statistics saved to {summary_file}")
 
 
 def do_overlap(boundaries):
@@ -534,78 +579,80 @@ def select_and_plot_boundaries(args, colors=["red", "blue", "orange"]):
         "universal-backward",
         "universal-forward-recurrence-5",
     ]
-    # design_guidance = "universal-forward"
-    start = 2
+
     time_step = args.frames - 1  # the final time step
     n_show_examples = args.batch_size
+    lambda_str = f"force_{args.lambda_force:.2e}_overlap_{args.lambda_overlap:.2e}_physics_{args.lambda_physics:.2e}"
+
     result_path = os.path.join(
         args.inference_result_path,
-        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_gophy_{}_phyLambda_{}".format(
+        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_lambda_{}".format(
             args.num_boundaries,
             args.frames,
             args.coeff_ratio,
             args.diffusion_checkpoint,
-            args.use_physics_loss,
-            args.lambda_physics,
+            lambda_str,
         ),
     )
     assert os.path.exists(result_path)
 
     for batch_id in range(args.num_batches):
-        valid = 0
         print("batch_id: ", batch_id)
         result_path_batch = os.path.join(result_path, "batch_{}".format(batch_id))
         preds = pickle.load(open(os.path.join(result_path_batch, "preds.pkl"), "rb"))
-        for design_guidance in preds.keys():
-            output = preds[design_guidance]
-            output = output.detach()
-        fname = "./plot_state_boundaries_batch_{}.pdf".format(batch_id)
-        pdf = PdfPages(os.path.join(result_path, fname))
-        for i in range(args.batch_size):
-            # print(i)
-            boundaries = []
-            isvalid = True
-            for j in range(args.num_boundaries):
-                mask = output[i][j][-3].cpu()[1:-1, 1:-1]
-                offset = output[i][j][-2:].cpu()[:, 1:-1, 1:-1].permute(1, 2, 0)
-                clean_mask = mask_denoise(mask)
-                try:
-                    restored_boundary = reconstruct_boundary(clean_mask, offset)
-                except:
-                    isvalid = False
-                    break
-                if restored_boundary.shape[0] < 3:
-                    isvalid = False
-                    break
-                boundaries.append(restored_boundary)
 
-            if not isvalid:
+        for design_guidance in design_guidance_list:
+            if design_guidance not in preds:
                 continue
-            if do_overlap(boundaries):
-                continue
-            else:
+
+            output = preds[design_guidance].detach()
+
+            fname = f"./plot_state_boundaries_batch_{batch_id}_{design_guidance}.pdf"
+            pdf = PdfPages(os.path.join(result_path, fname))
+
+            valid = 0
+            for i in range(args.batch_size):
+                boundaries = []
+                isvalid = True
+                for j in range(args.num_boundaries):
+                    mask = output[i][j][-3].cpu()[1:-1, 1:-1]
+                    offset = output[i][j][-2:].cpu()[:, 1:-1, 1:-1].permute(1, 2, 0)
+                    clean_mask = mask_denoise(mask)
+                    try:
+                        restored_boundary = reconstruct_boundary(clean_mask, offset)
+                    except:
+                        isvalid = False
+                        break
+                    if restored_boundary.shape[0] < 3:
+                        isvalid = False
+                        break
+                    boundaries.append(restored_boundary)
+
+                if not isvalid or do_overlap(boundaries):
+                    continue
+
                 fig, ax = plt.subplots(
                     figsize=(args.num_boundaries * 12 + 5, 4),
                     ncols=2 * args.num_boundaries + 1,
                 )
                 if not os.path.exists(os.path.join(result_path, "boundaries")):
                     os.makedirs(os.path.join(result_path, "boundaries"))
+
                 for j in range(args.num_boundaries):
                     bd = [[x[0], x[1], 0.0] for x in boundaries[j].tolist()]
                     with open(
                         os.path.join(
                             result_path,
                             "boundaries",
-                            "batch_{}_sim_{}_boundary_{}.txt".format(
-                                batch_id, valid, j
-                            ),
+                            f"batch_{batch_id}_sim_{valid}_boundary_{j}_{design_guidance}.txt",
                         ),
                         "w",
                     ) as file:
                         file.write(str(bd))
+
                     vx = output[i][j][time_step * 3].cpu().numpy()
                     im = ax[j * 2].imshow(vx, cmap="viridis", aspect="auto")
-                    ax[j * 2].set_title("Example {}: bd {} v_x".format(i, j))
+                    ax[j * 2].set_title(f"{design_guidance}: Example {i}, bd {j} v_x")
                     ax[j * 2].set_xlabel("X-Axis")
                     ax[j * 2].set_ylabel("Y-Axis")
                     ax[j * 2].set_ylim(0, 62)
@@ -613,43 +660,185 @@ def select_and_plot_boundaries(args, colors=["red", "blue", "orange"]):
 
                     vy = output[i][j][1 + time_step * 3].cpu().numpy()
                     im = ax[j * 2 + 1].imshow(vy, cmap="viridis", aspect="auto")
-                    ax[j * 2 + 1].set_title("Example {}: bd {} v_y ".format(i, j))
+                    ax[j * 2 + 1].set_title(
+                        f"{design_guidance}: Example {i}, bd {j} v_y"
+                    )
                     ax[j * 2 + 1].set_xlabel("X-Axis")
                     ax[j * 2 + 1].set_ylabel("Y-Axis")
                     ax[j * 2 + 1].set_ylim(0, 62)
                     ax[j * 2 + 1].set_xlim(0, 62)
-                    ax[j * 2].plot(
-                        np.append(boundaries[j][:, 0], boundaries[j][0, 0]),
-                        np.append(boundaries[j][:, 1], boundaries[j][0, 1]),
-                        color=colors[j],
-                    )
-                    ax[j * 2 + 1].plot(
-                        np.append(boundaries[j][:, 0], boundaries[j][0, 0]),
-                        np.append(boundaries[j][:, 1], boundaries[j][0, 1]),
-                        color=colors[j],
-                    )
-                    fig.colorbar(im, ax=ax[j * 2])
-                    fig.colorbar(im, ax=ax[j * 2 + 1])
+
+                    for k in range(2):
+                        ax[j * 2 + k].plot(
+                            np.append(boundaries[j][:, 0], boundaries[j][0, 0]),
+                            np.append(boundaries[j][:, 1], boundaries[j][0, 1]),
+                            color=colors[j],
+                        )
+                        fig.colorbar(im, ax=ax[j * 2 + k])
+
                     ax[2 * args.num_boundaries].plot(
                         np.append(boundaries[j][:, 0], boundaries[j][0, 0]),
                         np.append(boundaries[j][:, 1], boundaries[j][0, 1]),
                         color=colors[j],
                     )
+
                 ax[2 * args.num_boundaries].set_xlim(0, 62)
                 ax[2 * args.num_boundaries].set_ylim(0, 62)
                 ax[2 * args.num_boundaries].set_title(
-                    "Example {}: {} boundaries together".format(i, args.num_boundaries)
+                    f"{design_guidance}: Example {i}, {args.num_boundaries} boundaries together"
                 )
                 valid += 1
-                # plt.show()
                 pdf.savefig(fig)
-        pdf.close()
+                plt.close(fig)
+
+            pdf.close()
+            print(f"Completed {design_guidance} for batch {batch_id}")
+
+
+def select_and_plot_boundaries_new(
+    args,
+    colors=["red", "blue", "orange"],
+    var_to_plot=["vx", "vy", "p"],  # only velocities are plotted
+):
+    design_guidance_list = [
+        "standard",
+        "standard-alpha",
+        "universal-forward",
+        "universal-backward",
+        "universal-forward-recurrence-5",
+    ]
+
+    time_step = args.frames - 1  # the final time step
+    n_show_examples = args.batch_size
+    num_var_to_plot = len(var_to_plot)
+
+    lambda_str = f"force_{args.lambda_force:.2e}_overlap_{args.lambda_overlap:.2e}_physics_{args.lambda_physics:.2e}"
+
+    result_path = os.path.join(
+        args.inference_result_path,
+        "num_bd_{}_frames_{}_coeff_ratio_{}_ckpt_{}_lambda_{}".format(
+            args.num_boundaries,
+            args.frames,
+            args.coeff_ratio,
+            args.diffusion_checkpoint,
+            lambda_str,
+        ),
+    )
+    assert os.path.exists(result_path)
+
+    for batch_id in range(args.num_batches):
+        print("batch_id: ", batch_id)
+        result_path_batch = os.path.join(result_path, "batch_{}".format(batch_id))
+        preds = pickle.load(open(os.path.join(result_path_batch, "preds.pkl"), "rb"))
+
+        for design_guidance in design_guidance_list:
+            if design_guidance not in preds:
+                continue
+
+            output = preds[design_guidance].detach()
+
+            fname = f"./plot_state_boundaries_batch_{batch_id}_{design_guidance}.pdf"
+            pdf = PdfPages(os.path.join(result_path, fname))
+
+            valid = 0
+            for i in range(args.batch_size):
+                boundaries = []
+                isvalid = True
+                for j in range(args.num_boundaries):
+                    mask = output[i][j][-3].cpu()[1:-1, 1:-1]
+                    offset = output[i][j][-2:].cpu()[:, 1:-1, 1:-1].permute(1, 2, 0)
+                    clean_mask = mask_denoise(mask)
+                    try:
+                        restored_boundary = reconstruct_boundary(clean_mask, offset)
+                    except:
+                        isvalid = False
+                        break
+                    if restored_boundary.shape[0] < 3:
+                        isvalid = False
+                        break
+                    boundaries.append(restored_boundary)
+
+                if not isvalid or do_overlap(boundaries):
+                    continue
+
+                fig, ax = plt.subplots(
+                    figsize=(num_var_to_plot * 5 + 5, 4), ncols=num_var_to_plot + 1
+                )
+
+                for j, var in enumerate(var_to_plot):
+                    if var == "vx":
+                        field = output[i][0][time_step * 3].cpu().numpy()
+                    elif var == "vy":
+                        field = output[i][0][1 + time_step * 3].cpu().numpy()
+                    elif var == "p":
+                        field = output[i][0][2 + time_step * 3].cpu().numpy()
+                    else:
+                        raise ValueError(f"Unsupported variable: {var}")
+
+                    im = ax[j].imshow(field, cmap="viridis", aspect="auto")
+                    ax[j].set_title(f"{design_guidance}: Example {i}, {var}")
+                    ax[j].set_xlabel("X-Axis")
+                    ax[j].set_ylabel("Y-Axis")
+                    ax[j].set_ylim(0, 62)
+                    ax[j].set_xlim(0, 62)
+                    fig.colorbar(im, ax=ax[j])
+
+                    # Overlay boundaries on each field plot
+                    for k in range(args.num_boundaries):
+                        ax[j].plot(
+                            np.append(boundaries[k][:, 0], boundaries[k][0, 0]),
+                            np.append(boundaries[k][:, 1], boundaries[k][0, 1]),
+                            color=colors[k],
+                        )
+
+                # Plot showing only boundaries
+                ax[-1].set_xlim(0, 62)
+                ax[-1].set_ylim(0, 62)
+                ax[-1].set_title(f"{design_guidance}: Example {i}, All Boundaries")
+                ax[-1].set_xlabel("X-Axis")
+                ax[-1].set_ylabel("Y-Axis")
+                for k in range(args.num_boundaries):
+                    ax[-1].plot(
+                        np.append(boundaries[k][:, 0], boundaries[k][0, 0]),
+                        np.append(boundaries[k][:, 1], boundaries[k][0, 1]),
+                        color=colors[k],
+                    )
+
+                # Save boundaries to text files
+                if not os.path.exists(os.path.join(result_path, "boundaries")):
+                    os.makedirs(os.path.join(result_path, "boundaries"))
+
+                for k in range(args.num_boundaries):
+                    bd = [[x[0], x[1], 0.0] for x in boundaries[k].tolist()]
+                    with open(
+                        os.path.join(
+                            result_path,
+                            "boundaries",
+                            f"batch_{batch_id}_sim_{i}_boundary_{k}_{design_guidance}.txt",
+                        ),
+                        "w",
+                    ) as file:
+                        file.write(str(bd))
+
+                plt.tight_layout()
+                plt.savefig(
+                    os.path.join(
+                        result_path,
+                        f"batch_{batch_id}_example_{i}_{design_guidance}.png",
+                    )
+                )
+                pdf.savefig(fig)
+                plt.close(fig)
+
+            pdf.close()
+            print(f"Completed {design_guidance} for batch {batch_id}")
 
 
 def main(args):
     force_model, diffusion, design_fn = load_model(args)
     inference(force_model, diffusion, design_fn, args)
-    select_and_plot_boundaries(args)
+    # select_and_plot_boundaries(args)
+    select_and_plot_boundaries_new(args)
 
 
 # run all the inference experiments

@@ -6,7 +6,7 @@ log_path="./logs_guidance_new"
 
 # Define arrays for use_physics, physics_lambda, and num_boundaries
 use_physics_options=(True False)
-physics_lambda_options=(0.1 1.0 2.0)
+physics_lambda_options=(0.1 1.0)
 num_boundaries_options=(1 2 3)
 
 # Base command

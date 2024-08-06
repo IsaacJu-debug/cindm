@@ -90,14 +90,16 @@ class DivergenceFreePrior:
             div_res.reshape(num_examples, -1), self.norm_order, 1
         )  # (B)
 
-        return residual
+        mae_error = torch.mean(torch.abs(div_res), dim=(1, 2, 3))
+
+        return residual, mae_error
 
     def residual_correction(self, x0_pred):
         assert (
             len(x0_pred.shape) == 4
         ), "Model output must be a tensor shaped as b_c_xy."
 
-        residual = self.forward(x0_pred)
+        residual, mae_error = self.forward(x0_pred)
         grad = torch.autograd.grad(
             residual, x0_pred, grad_outputs=torch.ones_like(residual)
         )[0]
@@ -108,4 +110,4 @@ class DivergenceFreePrior:
         residual_grad = correction_eps * grad.detach()
         # residual_corrected = self.forward(x0_pred)
 
-        return residual_grad, residual
+        return residual_grad, residual, mae_error

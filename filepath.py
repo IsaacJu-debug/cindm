@@ -1,10 +1,10 @@
 import os
 import sys
 
+AIRFOILS_PATH = "/data/01_cindm/dataset/airfoils_dataset/"
 sys.path.append(os.path.join(os.path.dirname("__file__"), ".."))
 sys.path.append(os.path.join(os.path.dirname("__file__"), "..", ".."))
 
-AIRFOILS_PATH = "/data/pde_data/isaacju.data/cindm/dataset/airfoils_dataset/"
 NBODY_PATH = "dataset/nbody_dataset/"
 pos = "current_wp"
 current_wp = os.getcwd()

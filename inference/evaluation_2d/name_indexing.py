@@ -1,10 +1,13 @@
 import os
 import shutil
 
+
 def index_name(root):
     full_filelist = os.listdir(root + "boundaries")
     full_filelist.sort()
-    filelist = list(set([file[:-5] for file in full_filelist if not file.startswith(".")]))
+    filelist = list(
+        set([file[:-5] for file in full_filelist if not file.startswith(".")])
+    )
     filelist.sort()
 
     print("filelist: ", len(filelist))
@@ -12,8 +15,8 @@ def index_name(root):
     index_dict = {}
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
-    
-    for i, file in enumerate(filelist):    
+
+    for i, file in enumerate(filelist):
         index_dict[file] = i
     print(len(full_filelist))
     for file in full_filelist:
@@ -29,6 +32,6 @@ def index_name(root):
 
 if __name__ == "__main__":
     # root = "./double/" # the folder of two cell in Table 3
-    root = "./single/" # the folder of one cell in Table 3
-
+    # root = "./single/" # the folder of one cell in Table 3
+    root = "/workspaces/cindm/saved/inference_2d/num_bd_3_frames_6_coeff_ratio_0.0002_ckpt_500/"
     index_name(root)

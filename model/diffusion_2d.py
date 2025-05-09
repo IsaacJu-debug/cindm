@@ -12,10 +12,8 @@ from cindm.utils import p
 from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange
 from ema_pytorch import EMA
-from PIL import Image
 from torch import einsum, nn
 from torch.optim import Adam
-from torch.utils.data import Dataset  # , DataLoader
 
 # from torch_geometric.loader import DataLoader
 try:
@@ -23,7 +21,6 @@ try:
 except ImportError:
     from torch_geometric.data import DataLoader
 
-from torchvision import transforms as T
 from tqdm.auto import tqdm
 
 # constants
@@ -947,7 +944,7 @@ class GaussianDiffusion(nn.Module):
                 if design_guidance.startswith("standard"):
                     with torch.enable_grad():
                         x_clone = x.clone().detach().requires_grad_()
-                        grad_design = design_fn(x_clone)
+                        grad_design, _ = design_fn(x_clone)
                     if design_guidance == "standard":
                         grad_design_final = self.standard_fixed_ratio * grad_design
                     elif design_guidance == "standard-alpha":
@@ -961,7 +958,7 @@ class GaussianDiffusion(nn.Module):
                             x_clone = (
                                 x_start.clone().detach().requires_grad_()
                             )  # TODO check x_start shared
-                            grad_design = design_fn(x_clone)
+                            grad_design, _ = design_fn(x_clone)
                         # grad_design_final = eta * grad_design
                         grad_design_final = (
                             self.forward_fixed_ratio * grad_design
@@ -971,7 +968,7 @@ class GaussianDiffusion(nn.Module):
                         with torch.enable_grad():
                             x_clone = x_start.clone().detach().requires_grad_()
                             for kk in range(self.backward_steps):
-                                grad_design = design_fn(x_clone)
+                                grad_design, _ = design_fn(x_clone)
                                 if kk == 1:
                                     # grad_design_final = eta * grad_design
                                     grad_design_final = (
@@ -1006,7 +1003,7 @@ class GaussianDiffusion(nn.Module):
                     if design_guidance.startswith("standard"):
                         with torch.enable_grad():
                             x_clone = x.clone().detach().requires_grad_()
-                            grad_design = design_fn(x_clone)
+                            grad_design, _ = design_fn(x_clone)
                         if design_guidance.startswith("standard-recurrence"):
                             grad_design_final = self.standard_fixed_ratio * grad_design
                         elif design_guidance.startswith("standard-alpha-recurrence"):
@@ -1017,7 +1014,7 @@ class GaussianDiffusion(nn.Module):
                         if design_guidance.startswith("universal-forward-recurrence"):
                             with torch.enable_grad():
                                 x_clone = x_start.clone().detach().requires_grad_()
-                                grad_design = design_fn(x_clone)
+                                grad_design, _ = design_fn(x_clone)
                             grad_design_final = eta * grad_design
                         elif design_guidance.startswith(
                             "universal-backward-recurrence"
@@ -1025,7 +1022,7 @@ class GaussianDiffusion(nn.Module):
                             with torch.enable_grad():
                                 x_clone = x_start.clone().detach().requires_grad_()
                                 for kk in range(self.backward_steps):
-                                    grad_design = design_fn(x_clone)
+                                    grad_design, _ = design_fn(x_clone)
                                     if kk == 1:
                                         grad_design_final = eta * grad_design
                                     x_clone = x_clone - grad_design * self.backward_lr
@@ -1089,6 +1086,7 @@ class GaussianDiffusion(nn.Module):
     ):
         batch, num_boundaries, device = shape[0], shape[1], self.betas.device
         img = self.sample_noise(shape, device)
+        print("Noise shape {}".format(img.shape))
         x_start = None
         for t in tqdm(
             reversed(range(0, self.num_timesteps)),
@@ -1313,7 +1311,6 @@ class GaussianDiffusion(nn.Module):
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
         return self.p_losses(img, t, cond, *args, **kwargs)
-
 
 
 # trainer class

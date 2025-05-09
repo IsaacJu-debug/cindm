@@ -15,6 +15,43 @@
                 "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
             },
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Bastion (Inference 2D)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference/inverse_design_2d.py",
+            "args": [
+                "--ForceNet_path", "/data/01_cindm/checkpoint_path/force_surrogate_model.pth",
+                "--diffusion_model_path", "/data/01_cindm/checkpoint_path/diffusion_2d/",
+                "--print_residual", "True",
+                "--save_residuals", "True",
+                "--batch_size", "10",
+                "--num_batches", "1",
+                "--num_boundaries", "2",
+                "--inference_result_path", "./saved/inference_2d_guidance_new/",
+                "--lambda_force", "1.0",
+                "--lambda_physics", "100.0",
+                "--lambda_overlap", "1.0",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug Evaluation 2D",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference/evaluation_2d/evaluation_2d_design.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}"
+            },
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

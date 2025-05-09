@@ -4,7 +4,7 @@
     },
     "mounts": [
         "type=bind,source=${localEnv:HOME}${localEnv:USERPROFILE},target=/user-home",
-        "type=bind,source=/mnt/fastdata,target=/data/pde_data"
+        "type=bind,source=/home/t-isaacju/data,target=/data/"
     ],
     "customizations": {
         "vscode": {
